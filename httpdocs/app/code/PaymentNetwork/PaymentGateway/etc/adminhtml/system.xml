@@ -25,6 +25,11 @@
 					<validate>required-entry no-whitespace</validate>
 					<comment>Ensure only letters and numbers are present without any whitespace or non-word characters</comment>
 				</field>
+				<field id="country_code" translate="label comment" type="text" sortOrder="7" showInDefault="1" showInWebsite="1" showInStore="1">
+					<label>Merchant Country Code</label>
+					<comment>ISO Alpha-2, 3 or Numeric code (e.g. GB/GBR/826) of the merchants country</comment>
+					<validate>required-entry no-whitespace</validate>
+				</field>
 				<field id="merchant_gateway_url" translate="label comment" type="text" sortOrder="6" showInDefault="1" showInWebsite="1" showInStore="0">
 					<label>Gateway URL</label>
 					<comment>Please enter your gateway URL.</comment>
@@ -43,7 +48,7 @@
 					<source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
 				</field>
 				<field id="customer_wallets_enabled" translate="label" type="select" sortOrder="9" showInDefault="1" showInWebsite="1" showInStore="0">
-					<label>Customer wallets</label>
+					<label>Customer Wallets</label>
 					<source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
 				</field>
 				<field id="order_status" translate="label" type="select" sortOrder="10" showInDefault="1" showInWebsite="1" showInStore="0">
@@ -65,11 +70,6 @@
 				<field id="specificcountry" translate="label" type="multiselect" sortOrder="14" showInDefault="1" showInWebsite="1" showInStore="0">
 					<label>Payment from Specific Countries</label>
 					<source_model>Magento\Directory\Model\Config\Source\Country</source_model>
-				</field>
-				<field id="debug" translate="label comment" type="select" sortOrder="15" showInDefault="1" showInWebsite="1" showInStore="0">
-					<label>Debug</label>
-					<comment>This mode is insecure and will slow performance. Intended for debugging ONLY.</comment>
-					<source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
 				</field>
 			</group>
 		</section>

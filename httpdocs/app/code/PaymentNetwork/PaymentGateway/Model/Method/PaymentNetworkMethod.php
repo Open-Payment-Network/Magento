@@ -60,7 +60,7 @@ class PaymentNetworkMethod extends AbstractMethod {
      */
     protected $gateway;
 
-    public $integrationType, $responsive, $countryCode, $currencyCode;
+    public $integrationType, $responsive, $countryCode;
 
     /**
      * @var UrlInterface
@@ -117,7 +117,6 @@ class PaymentNetworkMethod extends AbstractMethod {
         $this->integrationType = $this->getConfigData('integration_type');
         $this->responsive = $this->getConfigData('form_responsive') ? 'Y' : 'N';
         $this->countryCode = $this->getConfigData('country_code');
-        $this->currencyCode = $this->getConfigData('currency_code');
         $this->redirectToCheckoutOnPayFail = ($this->getConfigData('redirect_to_checkout_on_failed_payment') ? true : false);
         $this->sendCustomerInvoice = ($this->getConfigData('send_customer_sale_invoice') ? true : false);
 
@@ -148,12 +147,6 @@ class PaymentNetworkMethod extends AbstractMethod {
         $routeParams = [
             '_secure' => isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] == 'on',
         ];
-
-        $debug = $this->getConfigData('debug');
-
-        if ($debug) {
-            $routeParams['_query']['XDEBUG_SESSION_START'] = 'PHPSTORM';
-        }
 
         return self::$_urlBuilder->getUrl('paymentgateway/order/process', $routeParams);
     }
@@ -428,7 +421,7 @@ class PaymentNetworkMethod extends AbstractMethod {
             'amount'            => $amount,
             'transactionUnique' => uniqid(),
             'orderRef'          => $ref,
-            'countryCode'       => $billingAddress->getCountryId(),
+            'countryCode'       => $this->countryCode,
             'currencyCode'      => $order->getOrderCurrencyCode(),
             'customerName'      => $billingAddress->getName(),
             'customerAddress'   => $address,
