@@ -34,6 +34,10 @@ use Magento\Sales\Model\Order\Payment;
 use Magento\Sales\Model\Order\Payment\Transaction\BuilderInterface;
 use Magento\Sales\Model\Order\Email\Sender\InvoiceSender;
 
+use Magento\Framework\Controller\Result\Json;
+use Magento\Framework\Controller\Result\Raw;
+use Magento\Framework\Controller\Result\Redirect;
+
 class PaymentNetworkMethod extends AbstractMethod {
     
     const VERIFY_ERROR      = 'The signature provided in the response does not match. This response might be fraudulent';
@@ -153,18 +157,24 @@ class PaymentNetworkMethod extends AbstractMethod {
 
     ##################################################
 
-    public function processHostedRequest(): string
+    public function processHostedRequest($returnRequest = false): string|array
     {
         $req = array_merge(
             $this->captureOrder(),
             [
                 'redirectURL'       => $this->getOrderPlaceRedirectUrl(),
-                //'callbackURL'     => $this->getOrderPlaceRedirectUrl(),
+                'callbackURL'       => $this->getOrderPlaceRedirectUrl(),
                 'formResponsive'    => $this->responsive,
             ]
         );
 
-        return $this->gateway->hostedRequest($req, $this->integrationType === Integration::TYPE_HOSTED_EMBEDDED, $this->integrationType === Integration::TYPE_HOSTED_MODAL);
+        if ($returnRequest) {
+            $req['gatewayURL'] = $this->getConfigData('merchant_gateway_url') . '/hosted/';
+            $req['signature'] = $this->gateway->sign($req, $this->getConfigData('merchant_shared_key'));
+            return $req;
+        } else {
+            return $this->gateway->hostedRequest($req, false, $this->integrationType === Integration::TYPE_HOSTED_MODAL);
+        }
     }
 
     public function processDirectRequest(): array
@@ -210,14 +220,24 @@ class PaymentNetworkMethod extends AbstractMethod {
         throw new InvalidArgumentException('Something went wrong with processing direct request, please check $_POST data');
     }
 
-    public function processResponse(array $data)
+    public function processResponse(array $response)
     {
-        $this->createWallet($data);
+        if ($this->gateway->verifyResponse($response)) {
 
-        $this->gateway->verifyResponse($data, [$this, 'onThreeDSRequired'], [$this, 'onSuccessfulTransaction'], [$this, 'onFailedTransaction']);
+            if ((int)$response['responseCode'] === 65802) {
+                return $this->onThreeDSRequired($response);
+            } else if ((int)$response['responseCode'] === 0) {
+                // Create the wallet entry Module side.
+                $this->createWallet($response);
+                return $this->onSuccessfulTransaction($response);
+            } else if ((int)$response['responseCode'] !== 0) {
+                return $this->onFailedTransaction($response);
+            }
+        
+        }
     }
 
-    public function onThreeDSRequired($threeDSVersion, $res) {
+    public function onThreeDSRequired($res) {
 
         setcookie('threeDSRef', $res['threeDSRef'], [
             'expires' => time() + 500,
@@ -228,16 +248,11 @@ class PaymentNetworkMethod extends AbstractMethod {
             'samesite' => 'None'
         ]);
 
-        // check for version
-        echo Gateway::silentPost($res['threeDSURL'], $res['threeDSRequest']);
+        $_SESSION['threeDSRef'] = $res['threeDSRef'];
 
-        if ($threeDSVersion >= 200) {
-            // Silently POST the 3DS request to the ACS in the IFRAME
-            // Remember the threeDSRef as need it when the ACS responds
-            $_SESSION['threeDSRef'] = $res['threeDSRef'];
-        }
+        $result = ['responseCode'=> 65802, 'threeDSRequest' => $res['threeDSRequest'], 'threeDSURL' => $res['threeDSURL']];
 
-        exit();
+        return $result;
     }
 
     /**
@@ -365,15 +380,15 @@ class PaymentNetworkMethod extends AbstractMethod {
             $payment->save();
             $order->save();
             $transaction->save();
+
+            $data['lastOrderID'] = $order->getIncrementId();
         }
 
-        $this->_checkoutSession->setLastSuccessQuoteId($order->getId());
-        $this->_checkoutSession->setLastQuoteId($order->getId());
-        $this->_checkoutSession->setLastOrderId($order->getId());
-        $this->_checkoutSession->setLastRealOrderId($order->getIncrementId());
+        return $data;
     }
 
-    public function onFailedTransaction($data = null) {
+    public function onFailedTransaction($data) {
+
         if (isset($data['orderRef'], $data['responseCode'])) {
             $status = $this->getConfigData('unsuccessful_status');
 
@@ -381,13 +396,25 @@ class PaymentNetworkMethod extends AbstractMethod {
             $order = $this->orderFactory->create();
             $order->loadByIncrementId($orderId);
 
-            $orderMessage = "Payment Unsuccessful <br/><br/>" . 
-                "Message: " . $data['responseMessage'] . "<br/>" .
-                "xref: " . $data['xref'] . "<br/>";
+            $orderMessage = "Payment Unsuccessful <br/><br/>" .
+                "Message: " . $data['responseMessage'] . "<br/>";
+
+            if (isset($data['xref'])) {
+                $orderMessage .= "xref: " . $data['xref'] . "<br/>";
+            }
+
+            $data['lastOrderID'] = $order->getIncrementId();
             
             $order->addStatusToHistory($status, $orderMessage, 0);
             $order->save();
         }
+
+        $this->_checkoutSession->setLastSuccessQuoteId($order->getId());
+        $this->_checkoutSession->setLastQuoteId($order->getId());
+        $this->_checkoutSession->setLastOrderId($order->getId());
+        $this->_checkoutSession->setLastRealOrderId($order->getIncrementId());
+
+        return $data;
     }
 
     /**
@@ -436,7 +463,7 @@ class PaymentNetworkMethod extends AbstractMethod {
         $req['action'] = 'SALE';
         $req['type'] = 1;
 
-        if(!is_null($billingAddress->getTelephone())) {
+        if (!is_null($billingAddress->getTelephone())) {
             $req["customerPhone"] = $billingAddress->getTelephone();
         }
 

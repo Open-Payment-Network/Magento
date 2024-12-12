@@ -12,7 +12,7 @@ Supports both Hosted and Direct integrations
 If you are upgrading this module, please make sure to disable the module first with `bin/magento module:disable PaymentNetwork_PaymentGateway`. Afterwards, make sure to delete the `app/code/PaymentNetwork` directory that may interfere with the new version. Make sure to delete the `PaymentNetwork_PaymentGateway` row from the `setup_module` table in the database so that any database tables required can get created.
 
 **Step 2:**
-Copy the contents of `httpdocs` to your Magento root directory. If you are asked if you want to replace any existing files, click Yes.
+Copy the contents of the `Payment Module` folder to your Magento root directory. If you are asked if you want to replace any existing files, click Yes.
 
 **Step 3:**
 Enable the new module using the command `bin/magento module:enable PaymentNetwork_PaymentGateway`

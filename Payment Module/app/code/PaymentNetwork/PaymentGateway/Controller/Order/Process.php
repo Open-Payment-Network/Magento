@@ -27,13 +27,16 @@ use Magento\Framework\App\Action\HttpPostActionInterface;
 use Magento\Framework\App\CsrfAwareActionInterface;
 use Magento\Framework\App\RequestInterface;
 use Magento\Framework\App\Request\InvalidRequestException;
+use Magento\Framework\Controller\ResultFactory;
 use Magento\Framework\Controller\Result\Json;
 use Magento\Framework\Controller\Result\Raw;
 use Magento\Framework\Controller\Result\Redirect;
 use PaymentNetwork\PaymentGateway\Model\Method\PaymentNetworkMethod;
 use PaymentNetwork\PaymentGateway\Model\Source\Integration;
 use Psr\Log\LoggerInterface;
-
+use PaymentNetwork\SDK\Gateway as GatewaySDK;
+use Magento\Framework\Controller\Result\JsonFactory;
+use Magento\Framework\View\Result\PageFactory;
 use Magento\Quote\Model\QuoteFactory;
 
 class Process extends Action implements HttpPostActionInterface, HttpGetActionInterface, CsrfAwareActionInterface {
@@ -41,6 +44,16 @@ class Process extends Action implements HttpPostActionInterface, HttpGetActionIn
      * @var PaymentNetworkMethod
      */
     private $gateway;
+
+    /**
+     * @var PageFactory
+     */
+    protected $_resultPageFactory;
+ 
+    /**
+     * @var JsonFactory
+     */
+    protected $_resultJsonFactory;
 
     /**
      * @var LoggerInterface
@@ -53,12 +66,15 @@ class Process extends Action implements HttpPostActionInterface, HttpGetActionIn
 
     public function __construct(
         Context $context,
+        PageFactory $resultPageFactory, 
+        JsonFactory $resultJsonFactory,
         PaymentNetworkMethod $model,
         LoggerInterface $logger,
         Session $checkoutSession
     ) {
         parent::__construct($context);
-
+        $this->_resultPageFactory = $resultPageFactory;
+        $this->_resultJsonFactory = $resultJsonFactory;
         $this->gateway = $model;
         $this->logger = $logger;
         $this->checkoutSession = $checkoutSession;
@@ -76,8 +92,27 @@ class Process extends Action implements HttpPostActionInterface, HttpGetActionIn
                     Integration::TYPE_HOSTED_EMBEDDED
                 ])
             ) {
-                echo $this->gateway->processHostedRequest();
-                exit;
+                // If embedded use the template
+                if ($this->gateway->integrationType === Integration::TYPE_HOSTED_EMBEDDED) {
+
+                    $request = $this->gateway->processHostedRequest(true);
+                    $result = $this->_resultJsonFactory->create();
+                    $resultPage = $this->_resultPageFactory->create();
+                    $block = $resultPage->getLayout()
+                        ->createBlock('PaymentNetwork\PaymentGateway\Block\Embedded')
+                        ->setTemplate('PaymentNetwork_PaymentGateway::embedded.phtml')
+                        ->setData('gatewayURL', $request['gatewayURL'])
+                        ->setData('requestFields', $request)
+                        ->toHtml();
+                    
+                    $result->setData(['success' => true, 'html' => $block]);
+                    return $result;
+
+                // Else carry on as before.
+                } else {
+                    echo $this->gateway->processHostedRequest();
+                    exit;
+                }
             }
 
             if ($this->gateway->integrationType === Integration::TYPE_DIRECT) {
@@ -85,15 +120,18 @@ class Process extends Action implements HttpPostActionInterface, HttpGetActionIn
             }
 
             $data = $response ?? $_POST;
+            $processedResponse = $this->gateway->processResponse($data);
 
-            $this->gateway->processResponse($data);
+            if ((int)$processedResponse['responseCode'] === 65802) {
+                return $this->redirect($processedResponse['threeDSURL'], $processedResponse);
+            }
 
-            $responseMessage = $data['responseMessage'];
+            $lastOrderID = (!empty($processedResponse['lastOrderID']) ? $processedResponse['lastOrderID'] : $_COOKIE['lastOrderID']);
 
             // If the payment was successfull redirect to success page.
-            if ($data['responseCode'] == 0) {
+            if ((int)$processedResponse['responseCode'] === 0) {
                 $this->messageManager->addSuccessMessage(__('Payment complete'));
-                return $this->redirect('checkout/onepage/success');
+                return $this->redirect('checkout/onepage/success', $processedResponse);
             } else {
                 // If the payment was not sucessfull then either redirect back
                 // to the cart if module setting 'redirect to checkout on pay' 
@@ -101,25 +139,22 @@ class Process extends Action implements HttpPostActionInterface, HttpGetActionIn
                 if ($this->gateway->redirectToCheckoutOnPayFail) {
                 
                     $objectManager = \Magento\Framework\App\ObjectManager::getInstance();
-                    $order = $objectManager->create('\Magento\Sales\Model\Order')->loadByIncrementId($_COOKIE['lastOrderID']);
+                    $order = $objectManager->create('\Magento\Sales\Model\Order')->loadByIncrementId($lastOrderID);
                     $quoteFactory = $objectManager->create('\Magento\Quote\Model\QuoteFactory');
                     $quote = $quoteFactory->create()->loadByIdWithoutStore($order->getQuoteId());
 
                     if ($quote->getId()) {
                         $quote->setIsActive(1)->setReservedOrderId(null)->save();
                         $this->checkoutSession->replaceQuote($quote);
-                        $this->messageManager->addErrorMessage("Payment Failed - $responseMessage.");
-                        return $this->redirect('checkout/cart', $data);
+                        $this->messageManager->addErrorMessage("Payment Failed - " . $processedResponse['responseMessage']);
+
+                        return $this->redirect('checkout/cart', $processedResponse);
                     }
 
                 } else {
-                    // Redirect to failure page with error.                
-                    $this->messageManager->addErrorMessage("Payment Failed - $responseMessage.");
-                    
-                    if (isset($data)) {
-                        $this->gateway->onFailedTransaction($data);
-                    }
-                    return $this->redirect('checkout/onepage/failure', $data);                
+                    // Redirect to failure page with error.
+                    $this->messageManager->addErrorMessage("Payment Failed - " . $processedResponse['responseMessage']);
+                    return $this->redirect('checkout/onepage/failure', $processedResponse);
                 }
             }
 
@@ -127,8 +162,8 @@ class Process extends Action implements HttpPostActionInterface, HttpGetActionIn
             $this->logger->error($exception->getMessage(), $exception->getTrace());
             $this->messageManager->addErrorMessage(__('Something went wrong with the payment, we were not able to process it, please contact support.'));
 
-            if (isset($data)) {
-                $this->gateway->onFailedTransaction($data);
+            if (isset($processedResponse)) {
+                $this->gateway->onFailedTransaction($processedResponse);
             }
             
             return $this->redirect('checkout/cart');
@@ -150,35 +185,54 @@ class Process extends Action implements HttpPostActionInterface, HttpGetActionIn
         return true;
     }
 
-    protected function redirect($path, $data = null) {
+    protected function redirect($path, $processedResponse = null) {
         if ((isset($_SERVER['HTTP_X_REQUESTED_WITH'])) && ($_SERVER['HTTP_X_REQUESTED_WITH'] == 'XMLHttpRequest')) {
-            
-            if ((isset($data['responseCode']) && $data['responseCode'] != 0)) {
+
+            if ((int)$processedResponse['responseCode'] === 65802)  {
                 
-                $result = $this->resultFactory->create('raw');
-                $contents = <<<SCRIPT
-<script>window.top.location.href = "{$this->_url->getUrl($path)}";</script>
-SCRIPT;
+                $result = $this->_resultJsonFactory->create();
+                $resultPage = $this->_resultPageFactory->create();
+                $block = $resultPage->getLayout()
+                    ->createBlock('PaymentNetwork\PaymentGateway\Block\ThreeDSView')
+                    ->setTemplate('PaymentNetwork_PaymentGateway::threedsview.phtml')
+                    ->setData('threeDSURL', $processedResponse['threeDSURL'])
+                    ->setData('threeDSRequest', $processedResponse['threeDSRequest'])
+                    ->toHtml();
+                
+                $result->setData(['success' => true, 'html' => $block]);
+                
+                return $result;
+            }
 
-                $result->setContents($contents);
-
-            } else {
+            if ((isset($processedResponse['responseCode']) && (int)$processedResponse['responseCode'] !== 0)) {
                 /** @var Json $result */
                 $result = $this->resultFactory->create('json');
-                $result->setData(['success' => 'true', 'path' => $path]);
+                $result->setData(['success' => true, 'path' => $path]);
             }
 
         } elseif ($this->gateway->integrationType === Integration::TYPE_HOSTED_EMBEDDED) {
+
             /** @var Raw $result */
             $result = $this->resultFactory->create('raw');
             $contents = <<<SCRIPT
 <script>window.top.location.href = "{$this->_url->getUrl($path)}";</script>
 SCRIPT;
             $result->setContents($contents);
+
+        } elseif ((int)$processedResponse['responseCode'] === 65802) {
+
+            $result = $this->resultFactory->create('raw');
+            $contents = GatewaySDK::silentPost($path, $processedResponse['threeDSRequest']);
+            $result->setContents($contents);
+
         } else {
-            /** @var Redirect $result */
-            $result = $this->resultFactory->create('redirect');
-            $result->setPath($path);
+
+            $result = $this->resultFactory->create('raw');
+            $contents = <<<SCRIPT
+<script>window.top.location.href = "{$this->_url->getUrl($path)}";</script>
+SCRIPT;
+            $result->setContents($contents);
+
         }
 
         return $result;
