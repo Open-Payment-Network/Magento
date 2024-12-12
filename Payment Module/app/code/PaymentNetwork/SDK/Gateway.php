@@ -143,7 +143,7 @@ class Gateway
 
 		if ($iframe) {
 			$htmlForm = <<<HTML
-<iframe id="paymentgatewayframe" name="paymentgatewayframe" frameBorder="0" seamless="seamless" style="width:699px; height:1100px;margin: 0 auto;display:block;"></iframe>
+<iframe id="paymentgatewayframe" name="paymentgatewayframe" frameBorder="0" seamless="seamless" style="width:100%; height:1200px; margin: 0 auto; display:block;"></iframe>
 HTML;
 			$htmlForm .= self::silentPost($url, $request, 'paymentgatewayframe');
 		} else {
@@ -264,7 +264,7 @@ HTML;
 	 * @param callable $onSuccess
 	 * @return mixed
 	 */
-	public function verifyResponse(array &$response, callable $onThreeDSRequired, callable $onSuccess, callable $onFailed)
+	public function verifyResponse(array &$response)
 	{
 		if (!$response || !isset($response['responseCode'])) {
 			throw new \RuntimeException('Invalid response from Payment Gateway');
@@ -291,21 +291,8 @@ HTML;
 			throw new \RuntimeException('Incorrectly signed response from Payment Gateway (2)');
 		}
 
-		settype($response['responseCode'], 'integer');
+		return true;
 
-		// Check the response code
-		if ($response['responseCode'] === Gateway::RC_3DS_AUTHENTICATION_REQUIRED) {
-
-			// Send request to the ACS server
-			$threeDSVersion = (int) str_replace('.', '', $response['threeDSVersion']);
-			return $onThreeDSRequired($threeDSVersion, $response);
-		} else if ($response['responseCode'] == Gateway::RC_SUCCESS) {
-
-			return $onSuccess($response);
-		} else if ($response['responseCode'] != Gateway::RC_SUCCESS) {
-
-			return $onFailed($response);
-		}
 	}
 
 	// Render HTML to silently POST data to URL in target browser window
