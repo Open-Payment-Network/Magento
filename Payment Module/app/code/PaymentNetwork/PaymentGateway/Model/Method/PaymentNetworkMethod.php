@@ -454,6 +454,7 @@ class PaymentNetworkMethod extends AbstractMethod {
             'customerAddress'   => $address,
             'customerEmail'     => $billingAddress->getEmail(),
             'customerPHPSESSID' => $_COOKIE['PHPSESSID'],
+            'lastOrderID'       => $orderId,
         ];
 
         if (filter_var($_SERVER['REMOTE_ADDR'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
